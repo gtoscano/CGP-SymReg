@@ -1,0 +1,125 @@
+history.csv
+# ===============================
+# Compiled Object Files
+# ===============================
+*.o
+*.obj
+*.lo
+*.la
+*.al
+*.libs
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# ===============================
+# Executables
+# ===============================
+*.exe
+*.out
+*.app
+
+# ===============================
+# Build Directories
+# ===============================
+build/
+build-*/
+cmake-build-*/
+bin/
+dist/
+
+# ===============================
+# CMake
+# ===============================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+
+# ===============================
+# Make / Ninja
+# ===============================
+*.make
+*.ninja
+.ninja_deps
+.ninja_log
+
+# ===============================
+# Debug / Profiling
+# ===============================
+*.dSYM/
+*.gdb
+*.lldb
+vgcore.*
+callgrind.out.*
+perf.data*
+*.prof
+
+# ===============================
+# Editor / IDE files
+# ===============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+*.log
+
+# ===============================
+# macOS
+# ===============================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ===============================
+# Linux
+# ===============================
+*~
+.fuse_hidden*
+.directory
+
+# ===============================
+# Windows
+# ===============================
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===============================
+# Dependency / Package Managers
+# ===============================
+conanbuildinfo.*
+conan.lock
+conaninfo.txt
+vcpkg_installed/
+.vcpkg-root
+
+# ===============================
+# Coverage & Testing
+# ===============================
+*.gcda
+*.gcno
+*.gcov
+coverage/
+lcov.info
+
+# ===============================
+# Logs & Runtime Artifacts
+# ===============================
+*.log
+*.pid
+*.cache
+
+# ===============================
+# Optional: Local Config
+# ===============================
+.env
+.env.local
+.env.*.local
+
