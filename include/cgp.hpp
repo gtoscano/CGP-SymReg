@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <ostream>
 #include "functions.hpp"
 #include "rng.hpp"
 
@@ -65,7 +66,10 @@ struct CGPConfig {
 
 struct NodeGene {
   Op op{};
-  std::vector<int> in; // indices of sources
+  // Fixed-arity inputs for cache-friendly evaluation.
+  int in0 = 0;
+  int in1 = 0;
+  int in2 = 0;
 };
 
 struct Genome {
@@ -86,6 +90,8 @@ public:
   std::vector<double> forward(const Genome& g, const std::vector<double>& x) const;
   void forward( const Genome& g, const double* x, double* out, std::vector<double>& node_out) const;
 
+  void plot_convergence(std::ostream& os, int width=60, int height=15) const;
+  const std::vector<double>& fitness_history() const { return fitness_history_; }
 
   std::string to_expression(const Genome& g, int out_index, bool print_constants=false) const;
 
@@ -95,6 +101,7 @@ public:
 private:
   CGPConfig cfg_;
   RNG rng_;
+  std::vector<double> fitness_history_;
   double input_usage_penalty(const Genome& g) const;
   Op sample_operator();
 
@@ -129,4 +136,3 @@ private:
 
   void mutate(Genome& g);
 };
-

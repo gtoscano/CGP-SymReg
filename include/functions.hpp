@@ -133,3 +133,21 @@ inline double eval_op(Op op, const std::vector<double>& in) {
   return 0.0;
 }
 
+inline double eval_op(Op op, double a, double b, double c) {
+  switch (op) {
+    case Op::ADD: return clamp_finite(a + b);
+    case Op::SUB: return clamp_finite(a - b);
+    case Op::MUL: return clamp_finite(a * b);
+    case Op::DIV: return clamp_finite(safe_div(a, b));
+    case Op::NEG: return clamp_finite(-a);
+    case Op::POW: return clamp_finite(safe_pow(a, b));
+    case Op::SIN: return clamp_finite(std::sin(a));
+    case Op::COS: return clamp_finite(std::cos(a));
+    case Op::TAN: return clamp_finite(safe_tan(a));
+    case Op::ASIN: return clamp_finite(safe_asin(std::clamp(a, -1.0, 1.0)));
+    case Op::ACOS: return clamp_finite(safe_acos(std::clamp(a, -1.0, 1.0)));
+    case Op::ATAN: return clamp_finite(std::atan(a));
+    case Op::ITE:  return (a > 0.0) ? clamp_finite(b) : clamp_finite(c);
+  }
+  return 0.0;
+}

@@ -2,6 +2,7 @@
 #include "csv.hpp"
 #include "benchmarks.hpp"
 #include "symbolic_simplifier.hpp"
+#include <fstream>
 #include <iostream>
 #include <cmath>
 #include <cstdio>
@@ -171,7 +172,7 @@ int main(int argc, char** argv) {
   cfg.erc_max = 1.0;
 
   cfg.lambda = 20;
-  cfg.generations = 8000;
+  cfg.generations = 200;
 
   cfg.mutation_rate = 0.06;
   cfg.const_mutation_rate = 0.15;
@@ -185,6 +186,15 @@ int main(int argc, char** argv) {
   CGP cgp(cfg);
   Genome best = cgp.evolve(train);
   std::cout << "Best fitness: " << best.fitness << "\n";
+  std::cout << "\nConvergence:\n";
+  //cgp.plot_convergence(std::cout);
+
+  std::ofstream hist("history.csv");
+  hist << "generation,fitness\n";
+  const auto& h = cgp.fitness_history();
+  for (size_t i = 0; i < h.size(); ++i) {
+    hist << i << "," << h[i] << "\n";
+  }
 
   for (int o = 0; o < cfg.n_outputs; ++o) {
       std::string expr = cgp.to_expression(best, o);
@@ -305,4 +315,3 @@ int main_previous(int argc, char** argv) {
 
   return 0;
 }
-

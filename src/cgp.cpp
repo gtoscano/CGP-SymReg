@@ -7,6 +7,14 @@
 #include <numeric>
 #include <functional>
 
+namespace {
+template <typename F>
+inline void for_each_input(const NodeGene& node, int a, F&& f) {
+  if (a >= 1) f(node.in0);
+  if (a >= 2) f(node.in1);
+  if (a >= 3) f(node.in2);
+}
+} // namespace
 
 int CGP::count_used_inputs(const Genome& g) const {
     std::vector<char> used(cfg_.n_inputs, 0);
@@ -52,8 +60,8 @@ double CGP::input_usage_penalty(const Genome& g) const {
     int ni = src - offset;
     if (ni < 0 || ni >= num_nodes()) return;
 
-    for (int s : g.nodes[ni].in)
-      visit(s);
+    const auto& node = g.nodes[ni];
+    for_each_input(node, arity(node.op), visit);
   };
 
   for (int o = 0; o < cfg_.n_outputs; ++o)
@@ -141,10 +149,10 @@ Genome CGP::random_genome() {
     //ng.op = cfg_.function_set[rng_.randint(0, (int)cfg_.function_set.size() - 1)];
     ng.op = sample_operator();
 
-
     const int a = arity(ng.op);
-    ng.in.resize(a);
-    for (int k = 0; k < a; ++k) ng.in[k] = random_source_for_node(i);
+    if (a >= 1) ng.in0 = random_source_for_node(i);
+    if (a >= 2) ng.in1 = random_source_for_node(i);
+    if (a >= 3) ng.in2 = random_source_for_node(i);
     g.nodes[i] = std::move(ng);
   }
 
@@ -178,12 +186,13 @@ void CGP::mark_active(const Genome& g, std::vector<char>& active) const {
     active[ni] = 1;
 
     const auto& node = g.nodes[ni];
-    for (int s : node.in) {
+    auto push_prev = [&](int s) {
       if (s >= base_sources()) {
         int pj = s - base_sources();
         if (0 <= pj && pj < num_nodes()) stack.push_back(pj);
       }
-    }
+    };
+    for_each_input(node, arity(node.op), push_prev);
   }
 }
 
@@ -213,7 +222,8 @@ double CGP::reuse_penalty(const Genome& g) const {
 
   for (int i = 0; i < num_nodes(); ++i) {
     if (!active[i]) continue;
-    for (int s : g.nodes[i].in) add_ref(s);
+    const auto& node = g.nodes[i];
+    for_each_input(node, arity(node.op), add_ref);
   }
 
   double pen = 0.0;
@@ -262,10 +272,11 @@ std::vector<double> CGP::forward(const Genome& g, const std::vector<double>& x) 
 
   for (int i = 0; i < num_nodes(); ++i) {
     const auto& node = g.nodes[i];
-    std::vector<double> in;
-    in.reserve(node.in.size());
-    for (int s : node.in) in.push_back(get_source_value(g, node_out, x, s));
-    node_out[i] = eval_op(node.op, in);
+    const int a = arity(node.op);
+    const double v0 = (a >= 1) ? get_source_value(g, node_out, x, node.in0) : 0.0;
+    const double v1 = (a >= 2) ? get_source_value(g, node_out, x, node.in1) : 0.0;
+    const double v2 = (a >= 3) ? get_source_value(g, node_out, x, node.in2) : 0.0;
+    node_out[i] = eval_op(node.op, v0, v1, v2);
   }
 
   std::vector<double> out(cfg_.n_outputs, 0.0);
@@ -273,6 +284,46 @@ std::vector<double> CGP::forward(const Genome& g, const std::vector<double>& x) 
     out[o] = get_source_value(g, node_out, x, g.outputs[o]);
   }
   return out;
+}
+
+void CGP::forward(const Genome& g, const double* x, double* out, std::vector<double>& node_out) const {
+  if ((int)node_out.size() != num_nodes()) {
+    node_out.assign(num_nodes(), 0.0);
+  } else {
+    std::fill(node_out.begin(), node_out.end(), 0.0);
+  }
+
+  auto get_source_value_ptr = [&](int src) -> double {
+    if (src < cfg_.n_inputs) return x[src];
+    int offset = cfg_.n_inputs;
+
+    if (cfg_.use_constants) {
+      if (src < offset + cfg_.n_constants) return g.constants[src - offset];
+      offset += cfg_.n_constants;
+    }
+
+    if (cfg_.use_erc) {
+      if (src < offset + num_nodes()) return g.erc[src - offset];
+      offset += num_nodes();
+    }
+
+    int ni = src - offset;
+    if (0 <= ni && ni < num_nodes()) return node_out[ni];
+    return 0.0;
+  };
+
+  for (int i = 0; i < num_nodes(); ++i) {
+    const auto& node = g.nodes[i];
+    const int a = arity(node.op);
+    const double v0 = (a >= 1) ? get_source_value_ptr(node.in0) : 0.0;
+    const double v1 = (a >= 2) ? get_source_value_ptr(node.in1) : 0.0;
+    const double v2 = (a >= 3) ? get_source_value_ptr(node.in2) : 0.0;
+    node_out[i] = eval_op(node.op, v0, v1, v2);
+  }
+
+  for (int o = 0; o < cfg_.n_outputs; ++o) {
+    out[o] = get_source_value_ptr(g.outputs[o]);
+  }
 }
 
 
@@ -355,7 +406,9 @@ double CGP::evaluate_fitness(Genome& g, const Dataset& data, double anneal01) co
         if (improvement > 0.0) {
             // reward improvement but do not overshoot
             //fitness -= 0.5 * improvement;
-            fitness -= std::min(improvement, 0.5 * prev_fitness);
+            double reward = std::min(improvement, 0.5 * prev_fitness);
+            reward = std::min(reward, 0.5 * fitness);
+            fitness -= reward;
 
         }
     }
@@ -378,15 +431,15 @@ void CGP::mutate(Genome& g) {
         if (rng_.coin(cfg_.mutation_rate)) {
             node.op = sample_operator();
             int a = arity(node.op);
-            node.in.resize(a);
-            for (int k = 0; k < a; ++k)
-                node.in[k] = random_source_for_node(i);
+            if (a >= 1) node.in0 = random_source_for_node(i);
+            if (a >= 2) node.in1 = random_source_for_node(i);
+            if (a >= 3) node.in2 = random_source_for_node(i);
         }
 
-        for (int k = 0; k < (int)node.in.size(); ++k) {
-            if (rng_.coin(cfg_.mutation_rate))
-                node.in[k] = random_source_for_node(i);
-        }
+        int a = arity(node.op);
+        if (a >= 1 && rng_.coin(cfg_.mutation_rate)) node.in0 = random_source_for_node(i);
+        if (a >= 2 && rng_.coin(cfg_.mutation_rate)) node.in1 = random_source_for_node(i);
+        if (a >= 3 && rng_.coin(cfg_.mutation_rate)) node.in2 = random_source_for_node(i);
     };
 
     for (int i = 0; i < num_nodes(); ++i) {
@@ -427,6 +480,10 @@ Genome CGP::evolve(const Dataset& data) {
 
   Genome best = parent;
 
+  fitness_history_.clear();
+  fitness_history_.reserve(cfg_.generations + 1);
+  fitness_history_.push_back(parent.fitness);
+
   for (int gen = 0; gen < cfg_.generations; ++gen) {
     const double anneal = (cfg_.generations <= 1) ? 1.0
                       : (double)gen / (double)(cfg_.generations - 1);
@@ -442,9 +499,46 @@ Genome CGP::evolve(const Dataset& data) {
 
     if (gen_best.fitness <= parent.fitness) parent = gen_best;
     if (parent.fitness < best.fitness) best = parent;
+
+    fitness_history_.push_back(best.fitness);
   }
 
   return best;
+}
+
+void CGP::plot_convergence(std::ostream& os, int width, int height) const {
+  if (fitness_history_.empty()) {
+    os << "No convergence history available.\n";
+    return;
+  }
+
+  if (width < 2) width = 2;
+  if (height < 2) height = 2;
+
+  const size_t n = fitness_history_.size();
+  const auto mm = std::minmax_element(fitness_history_.begin(), fitness_history_.end());
+  double vmin = *mm.first;
+  double vmax = *mm.second;
+  double range = vmax - vmin;
+  if (range <= 0.0) range = 1.0;
+
+  std::vector<std::string> rows(height, std::string(width, ' '));
+  for (int col = 0; col < width; ++col) {
+    double t = (width == 1) ? 0.0 : (double)col / (double)(width - 1);
+    size_t idx = (size_t)std::llround(t * (double)(n - 1));
+    double v = fitness_history_[idx];
+    double y = (vmax - v) / range;
+    int row = (int)std::llround(y * (double)(height - 1));
+    row = std::max(0, std::min(height - 1, row));
+    rows[row][col] = '*';
+  }
+
+  for (int r = 0; r < height; ++r) {
+    os << rows[r] << "\n";
+  }
+  os << "min=" << std::setprecision(6) << vmin
+     << " max=" << std::setprecision(6) << vmax
+     << " generations=" << (n > 0 ? n - 1 : 0) << "\n";
 }
 
 std::string CGP::to_expression(const Genome& g, int out_index, bool print_constants) const {
@@ -474,22 +568,23 @@ std::string CGP::to_expression(const Genome& g, int out_index, bool print_consta
     visiting[ni] = 1;
     const auto& node = g.nodes[ni];
 
-    std::vector<std::string> args;
-    args.reserve(node.in.size());
-    for (int s : node.in) args.push_back(rec(s));
+    const int a = arity(node.op);
+    const std::string a0 = (a >= 1) ? rec(node.in0) : "0";
+    const std::string a1 = (a >= 2) ? rec(node.in1) : "0";
+    const std::string a2 = (a >= 3) ? rec(node.in2) : "0";
 
     std::string expr;
     switch (node.op) {
-      case Op::NEG: expr = "(-" + args[0] + ")"; break;
-      case Op::SIN: expr = "sin(" + args[0] + ")"; break;
-      case Op::COS: expr = "cos(" + args[0] + ")"; break;
-      case Op::TAN: expr = "tan(" + args[0] + ")"; break;
-      case Op::ASIN: expr = "asin(" + args[0] + ")"; break;
-      case Op::ACOS: expr = "acos(" + args[0] + ")"; break;
-      case Op::ATAN: expr = "atan(" + args[0] + ")"; break;
-      case Op::POW: expr = "pow(" + args[0] + "," + args[1] + ")"; break;
-      case Op::ITE: expr = "ite(" + args[0] + "," + args[1] + "," + args[2] + ")"; break;
-      default:      expr = "(" + args[0] + " " + std::string(op_name(node.op)) + " " + args[1] + ")"; break;
+      case Op::NEG: expr = "(-" + a0 + ")"; break;
+      case Op::SIN: expr = "sin(" + a0 + ")"; break;
+      case Op::COS: expr = "cos(" + a0 + ")"; break;
+      case Op::TAN: expr = "tan(" + a0 + ")"; break;
+      case Op::ASIN: expr = "asin(" + a0 + ")"; break;
+      case Op::ACOS: expr = "acos(" + a0 + ")"; break;
+      case Op::ATAN: expr = "atan(" + a0 + ")"; break;
+      case Op::POW: expr = "pow(" + a0 + "," + a1 + ")"; break;
+      case Op::ITE: expr = "ite(" + a0 + "," + a1 + "," + a2 + ")"; break;
+      default:      expr = "(" + a0 + " " + std::string(op_name(node.op)) + " " + a1 + ")"; break;
     }
 
     visiting[ni] = 0;
@@ -572,4 +667,3 @@ std::string CGP::simplify_expr(const std::string& expr) {
 
   return s;
 }
-
