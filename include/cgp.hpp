@@ -44,6 +44,7 @@ struct CGPConfig {
   // Evolution
   int lambda      = 10;
   int generations = 4000;
+  int stagnation_generations = 0; // 0 disables random restarts
 
   // Mutation
   double mutation_rate        = 0.06; // operator/wiring/output

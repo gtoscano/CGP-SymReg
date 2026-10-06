@@ -1,28 +1,27 @@
 # ===============================
-# Platform detection
+# Optional dependencies
 # ===============================
-UNAME_S := $(shell uname -s)
+.DEFAULT_GOAL := all
+
+SYMENGINE_CFLAGS := $(shell pkg-config --cflags symengine 2>/dev/null)
+SYMENGINE_LIBS := $(shell pkg-config --libs symengine 2>/dev/null)
 
 # ===============================
 # Compiler
 # ===============================
-ifeq ($(UNAME_S),Darwin)
-    CXX := /usr/bin/clang++
-    SYMENGINE_PREFIX := /opt/homebrew
-else
-    CXX := g++
-    SYMENGINE_PREFIX := /usr
-endif
+CXX ?= g++
 
 # ===============================
 # Compiler & Linker Flags
 # ===============================
 CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -Wno-unused-parameter -Wno-unused-variable \
-            -Iinclude -I$(SYMENGINE_PREFIX)/include
+            -MMD -MP -Iinclude
+LDFLAGS :=
 
-
-LDFLAGS  := -L$(SYMENGINE_PREFIX)/lib \
-            -lsymengine -lgmp
+ifneq ($(strip $(SYMENGINE_LIBS)),)
+    CXXFLAGS += $(SYMENGINE_CFLAGS) -DCGP_HAVE_SYMENGINE
+    LDFLAGS += $(SYMENGINE_LIBS)
+endif
 
 # ===============================
 # Project Structure
@@ -33,11 +32,12 @@ OBJ_DIR := build
 SRCS := src/main.cpp src/cgp.cpp src/benchmarks.cpp
 OBJS := $(patsubst src/%.cpp,$(OBJ_DIR)/src/%.o,$(SRCS))
 
-TEST_SRCS := tests/test_main.cpp src/cgp.cpp
-TEST_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(TEST_SRCS))
-
 APP := $(BIN_DIR)/cgp_symreg
-TEST_APP := $(BIN_DIR)/tests
+CGP_TEST_APP := $(BIN_DIR)/test_cgp
+BENCH_TEST_APP := $(BIN_DIR)/test_benchmarks
+DEPS := $(OBJS:.o=.d) $(OBJ_DIR)/tests/test_main.d $(OBJ_DIR)/tests/test_benchmarks.d
+
+-include $(DEPS)
 
 # ===============================
 # Build Rules
@@ -61,8 +61,11 @@ $(OBJ_DIR)/tests/%.o: tests/%.cpp | $(OBJ_DIR)
 $(APP): $(BIN_DIR) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(OBJS) -o $(APP) $(LDFLAGS)
 
-$(TEST_APP): $(BIN_DIR) $(TEST_OBJS)
-	$(CXX) $(CXXFLAGS) $(TEST_OBJS) -o $(TEST_APP) $(LDFLAGS)
+$(CGP_TEST_APP): $(OBJ_DIR)/tests/test_main.o $(OBJ_DIR)/src/cgp.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(BENCH_TEST_APP): $(OBJ_DIR)/tests/test_benchmarks.o $(OBJ_DIR)/src/benchmarks.o | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 # ===============================
 # Utility Targets
@@ -71,9 +74,9 @@ $(TEST_APP): $(BIN_DIR) $(TEST_OBJS)
 run: $(APP)
 	$(APP)
 
-test: $(TEST_APP)
-	$(TEST_APP)
+test: $(CGP_TEST_APP) $(BENCH_TEST_APP)
+	$(CGP_TEST_APP)
+	$(BENCH_TEST_APP)
 
 clean:
 	rm -rf $(BIN_DIR) $(OBJ_DIR)
-

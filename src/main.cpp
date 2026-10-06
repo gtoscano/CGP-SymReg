@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
 
   std::cout << "Train=" << train.n_samples() << " Test=" << test.n_samples() << "\n";
 
-  cfg.seed = std::random_device{}();
+  cfg.seed = seed;
 
   cfg.function_set = {
     Op::ADD,
@@ -144,18 +144,18 @@ int main(int argc, char** argv) {
 
   
   cfg.op_weights = {
-      6.0,  // ADD
-      4.0,  // SUB
-      6.0,  // MUL
-      1.0,  // DIV
-      1.0,  // NEG 
-      0.3,  // POW
-      1.5,  // SIN
-      0.5,  // COS
-      0.1,  // TAN
-      0.05,  // ASIN
-      0.05,  // ACOS
-      0.05,   // ATAN
+      4.0,  // ADD
+      2.0,  // SUB
+      4.0,  // MUL
+      0.5,  // DIV
+      0.5,  // NEG
+      0.1,  // POW
+      3.0,  // SIN
+      3.0,  // COS
+      0.0,  // TAN
+      0.0,   // ASIN (disabled: easily becomes a one-node shortcut)
+      0.0,   // ACOS
+      0.0,   // ATAN
       0.0   //  ITE
   };
 
@@ -172,7 +172,8 @@ int main(int argc, char** argv) {
   cfg.erc_max = 1.0;
 
   cfg.lambda = 20;
-  cfg.generations = 200;
+  cfg.generations = 5000;
+  cfg.stagnation_generations = 500;
 
   cfg.mutation_rate = 0.06;
   cfg.const_mutation_rate = 0.15;
@@ -198,7 +199,8 @@ int main(int argc, char** argv) {
 
   for (int o = 0; o < cfg.n_outputs; ++o) {
       std::string expr = cgp.to_expression(best, o);
-      std::cout << "Raw expression for "<<o<<":\n" << expr << "\n";
+      std::cout << "Raw expression for "<<o<<":\n"
+                << cgp.to_expression(best, o, true) << "\n";
       //auto simplified_py = simplify_expression(expr);
       //std::cout << "Simplified Python expression:\n" << simplified_py<< "\n";
       //auto simplified_internal = cgp.simplify_expr(expr);
@@ -216,7 +218,12 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 5 && i < (int)test.n_samples(); ++i) {
       auto pred = cgp.forward(best, test.X[i]);
   
-      std::cout << "x=" << test.X[i][0] << " pred=[";
+      std::cout << "x=[";
+      for (int j = 0; j < (int)test.X[i].size(); ++j) {
+          std::cout << test.X[i][j];
+          if (j + 1 < (int)test.X[i].size()) std::cout << ", ";
+      }
+      std::cout << "] pred=[";
       for (int j = 0; j < (int)pred.size(); ++j) {
           std::cout << pred[j];
           if (j + 1 < (int)pred.size()) std::cout << ", ";

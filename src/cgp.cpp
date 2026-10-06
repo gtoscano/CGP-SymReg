@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <functional>
+#include <stdexcept>
 
 namespace {
 template <typename F>
@@ -37,7 +38,7 @@ Op CGP::sample_operator() {
 
     for (size_t i = 0; i < cfg_.function_set.size(); ++i) {
         acc += cfg_.op_weights[i];
-        if (r <= acc)
+        if (r < acc)
             return cfg_.function_set[i];
     }
 
@@ -86,6 +87,33 @@ CGP::CGP(CGPConfig cfg)
       Op::ITE
     };
   }
+
+  if (cfg_.n_inputs <= 0) throw std::invalid_argument("n_inputs must be positive");
+  if (cfg_.n_outputs <= 0) throw std::invalid_argument("n_outputs must be positive");
+  if (cfg_.n_columns <= 0) throw std::invalid_argument("n_columns must be positive");
+  if (cfg_.levels_back <= 0) throw std::invalid_argument("levels_back must be positive");
+  if (cfg_.lambda <= 0) throw std::invalid_argument("lambda must be positive");
+  if (cfg_.generations < 0) throw std::invalid_argument("generations cannot be negative");
+  if (cfg_.stagnation_generations < 0)
+    throw std::invalid_argument("stagnation_generations cannot be negative");
+
+  if (cfg_.op_weights.empty()) {
+    cfg_.op_weights.assign(cfg_.function_set.size(), 1.0);
+  }
+  if (cfg_.op_weights.size() != cfg_.function_set.size()) {
+    throw std::invalid_argument("op_weights must have the same size as function_set");
+  }
+
+  double total_weight = 0.0;
+  for (double weight : cfg_.op_weights) {
+    if (!std::isfinite(weight) || weight < 0.0) {
+      throw std::invalid_argument("operator weights must be finite and non-negative");
+    }
+    total_weight += weight;
+  }
+  if (total_weight <= 0.0) {
+    throw std::invalid_argument("at least one operator weight must be positive");
+  }
 }
 
 int CGP::base_sources() const {
@@ -107,26 +135,42 @@ int CGP::min_source_for_node(int node_idx) const {
 }
 
 int CGP::random_source_for_node(int node_idx) {
-    int n_inputs = cfg_.n_inputs;
-    int first_node = base_sources();
-    int last_node  = first_node + node_idx - 1;
+    struct SourceGroup { int lo, hi; double weight; };
+    std::vector<SourceGroup> groups;
 
-    std::vector<int> candidates;
+    // Sample source categories rather than every source uniformly. Otherwise
+    // large constant/node pools drown out the small set of problem inputs.
+    groups.push_back({0, cfg_.n_inputs - 1, 0.35});
 
-    // Always allow inputs
-    for (int i = 0; i < n_inputs; ++i)
-        candidates.push_back(i);
-
-    // Allow previous node outputs only
-    if (node_idx > 0) {
-        for (int i = first_node; i <= last_node; ++i)
-            candidates.push_back(i);
+    int offset = cfg_.n_inputs;
+    if (cfg_.use_constants && cfg_.n_constants > 0) {
+      groups.push_back({offset, offset + cfg_.n_constants - 1, 0.20});
+      offset += cfg_.n_constants;
     }
 
-    if (candidates.empty())
-        return rng_.randint(0, n_inputs - 1);
+    if (cfg_.use_erc) {
+      // Each node owns one ERC; unrelated nodes' ERCs are not useful sources.
+      groups.push_back({offset + node_idx, offset + node_idx, 0.10});
+      offset += num_nodes();
+    }
 
-    return candidates[rng_.randint(0, (int)candidates.size() - 1)];
+    if (node_idx > 0) {
+      const int first_allowed_node = std::max(0, node_idx - cfg_.levels_back);
+      groups.push_back({offset + first_allowed_node, offset + node_idx - 1, 0.35});
+    }
+
+    double total_weight = 0.0;
+    for (const auto& group : groups) total_weight += group.weight;
+    const double choice = rng_.randreal(0.0, total_weight);
+    double accumulated = 0.0;
+    for (const auto& group : groups) {
+      accumulated += group.weight;
+      if (choice < accumulated)
+        return rng_.randint(group.lo, group.hi);
+    }
+
+    const auto& fallback = groups.back();
+    return rng_.randint(fallback.lo, fallback.hi);
 }
 
 
@@ -328,7 +372,7 @@ void CGP::forward(const Genome& g, const double* x, double* out, std::vector<dou
 
 
 std::vector<double> CGP::target_variance(const Dataset& data) const {
-  std::vector<double> var(cfg_.n_outputs, 1.0);
+  std::vector<double> var(cfg_.n_outputs, 0.0);
   if (data.n_samples() == 0) return var;
 
   std::vector<double> mean(cfg_.n_outputs, 0.0);
@@ -355,8 +399,6 @@ double CGP::evaluate_fitness(Genome& g, const Dataset& data, double anneal01) co
     if (data.n_samples() == 0) return g.fitness = 1e300;
     if ((int)data.n_inputs() != cfg_.n_inputs) return g.fitness = 1e300;
     if ((int)data.n_outputs() != cfg_.n_outputs) return g.fitness = 1e300;
-    const double prev_fitness = g.fitness;
-
     // ---- Mean Squared Error ----
     std::vector<double> var(cfg_.n_outputs, 1.0);
     if (cfg_.normalize_mse) {
@@ -398,22 +440,7 @@ double CGP::evaluate_fitness(Genome& g, const Dataset& data, double anneal01) co
         fitness += cfg_.reuse_beta * reuse_penalty(g);
     }
 
-    // ----------------------------------------------------
-    // Improvement reward (anti-stagnation)
-    // ----------------------------------------------------
-    if (prev_fitness < 1e29) {
-        double improvement = prev_fitness - fitness;
-        if (improvement > 0.0) {
-            // reward improvement but do not overshoot
-            //fitness -= 0.5 * improvement;
-            double reward = std::min(improvement, 0.5 * prev_fitness);
-            reward = std::min(reward, 0.5 * fitness);
-            fitness -= reward;
-
-        }
-    }
-
-    // floor to avoid runaway negatives
+    // Keep fitness deterministic for a genome, dataset, and annealing value.
     fitness = std::max(fitness, 1e-12);
 
     g.fitness = fitness;
@@ -483,24 +510,49 @@ Genome CGP::evolve(const Dataset& data) {
   fitness_history_.clear();
   fitness_history_.reserve(cfg_.generations + 1);
   fitness_history_.push_back(parent.fitness);
+  int stagnant_generations = 0;
 
   for (int gen = 0; gen < cfg_.generations; ++gen) {
     const double anneal = (cfg_.generations <= 1) ? 1.0
                       : (double)gen / (double)(cfg_.generations - 1);
 
+    // The objective changes as regularization is annealed, so reevaluate all
+    // survivors before comparing them with children under the new objective.
+    evaluate_fitness(parent, data, anneal);
+    evaluate_fitness(best, data, anneal);
+    const double parent_fitness = parent.fitness;
     Genome gen_best = parent;
 
     for (int k = 0; k < cfg_.lambda; ++k) {
       Genome child = parent;
       mutate(child);
       evaluate_fitness(child, data, anneal);
-      if (child.fitness < gen_best.fitness) gen_best = std::move(child);
+      // Prefer the newest equal-fitness genome as well. Neutral drift lets
+      // inactive graph regions accumulate useful structure before activation.
+      if (child.fitness <= gen_best.fitness) gen_best = std::move(child);
     }
 
+    const bool improved = gen_best.fitness + 1e-14 < parent_fitness;
     if (gen_best.fitness <= parent.fitness) parent = gen_best;
     if (parent.fitness < best.fitness) best = parent;
 
+    stagnant_generations = improved ? 0 : stagnant_generations + 1;
+    if (cfg_.stagnation_generations > 0 &&
+        stagnant_generations >= cfg_.stagnation_generations &&
+        gen + 1 < cfg_.generations) {
+      parent = random_genome();
+      evaluate_fitness(parent, data, anneal);
+      if (parent.fitness < best.fitness) best = parent;
+      stagnant_generations = 0;
+    }
+
     fitness_history_.push_back(best.fitness);
+  }
+
+  // A zero-generation run should still use the configured final objective.
+  if (cfg_.generations == 0) {
+    evaluate_fitness(best, data, 1.0);
+    fitness_history_.back() = best.fitness;
   }
 
   return best;

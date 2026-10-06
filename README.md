@@ -41,6 +41,7 @@ It supports:
 * C++17 or newer
 * `g++` or `clang++`
 * GNU Make
+* Optional: SymEngine (detected with `pkg-config`) for advanced expression simplification
 
 ### Build
 
@@ -124,7 +125,8 @@ cfg.n_inputs = 1;
 cfg.n_outputs = 1;
 
 cfg.lambda = 20;
-cfg.generations = 8000;
+cfg.generations = 5000;
+cfg.stagnation_generations = 500;
 
 cfg.mutation_rate = 0.06;
 cfg.const_mutation_rate = 0.15;
@@ -195,4 +197,3 @@ make
 * Increase **generations** for harder problems
 * Enable **ERCs** for polynomial discovery
 * Disable ERCs to force structure discovery
-
